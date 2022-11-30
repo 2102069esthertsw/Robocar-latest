@@ -20,9 +20,9 @@ void comms(void);
 int barcodeAvailable(void);
 
 // const int NUMBER_OF_DATAPOINTS = 6; // max number of data points expected in one loop around the submodules
-unsigned int previousIntegerData[5];
-unsigned int currentIntegerData[5];
-static char *datapointNames[6]={"speed","turning","distanceWhole","distanceDecimal", "humpHeight","barcode"};
+unsigned int previousIntegerData[6];
+unsigned int currentIntegerData[6];
+static char *datapointNames[7]={"speed","turning","distance","coordinates", "humpHeight","barcode", "nav_dir"};
 #define SPEED = 0;
 #define TURNING = 1;
 #define DISTANCE_WHOLE = 2;
@@ -100,6 +100,14 @@ void main()
     FlashCtl_setWaitState(FLASH_BANK1, 2);
     PCM_setCoreVoltageLevel(PCM_VCORE1);
     CS_setDCOCenteredFrequency(CS_DCO_FREQUENCY_12);
+
+    /* For ADC input, P4.1 */
+    ADC14->CTL0 = ADC14_CTL0_ON | ADC14_CTL0_SHT0__64 | ADC14_CTL0_SHP; // same as ADDC14CTL0 &= ~0x bit 4, 8-11, 26
+            // Turn on ADC | sampling time = 64 cycles | use timer as sampling trigger
+    ADC14->MCTL[0] = ADC14_MCTLN_VRSEL_0;       // Ref voltage: Vr+ = AVCC, Vr- = GND
+    ADC14->MCTL[0] = ADC14_MCTLN_INCH_12;       // Select input channel A12 (analog)
+    ADC14->CTL0 |= ADC14_CTL0_ENC;              // ENABLE CONVERSION (still need to trigger the start conversion via ADC_14_CTL0_SC)
+    P4->SELC |= 0x02;
 
     /*Initialize required hardware peripherals for the MSP's Serial Port*/
     MAP_GPIO_setAsPeripheralModuleFunctionInputPin(GPIO_PORT_P1, GPIO_PIN2 | GPIO_PIN3, GPIO_PRIMARY_MODULE_FUNCTION);
@@ -187,11 +195,15 @@ void comms(void){
 
 
 void getIntDatapoints(void){
-    currentIntegerData[0] = 1; // getSpeed();
-    currentIntegerData[1] = 1; // getTurning();
-    currentIntegerData[2] = 1; // getDistWhole();
-    currentIntegerData[3] = 1; // getDistDecimal();
-    currentIntegerData[4] = 1; // getHump_Height();
+    ADC14->CTL0 |= ADC14_CTL0_SC;   // software trigger to START CONVERSION
+
+    while(!(ADC14->IFGR0 & BIT0));
+    adcValue = (ADC14->MEM[0])/1024;       // read ADC14MEM0 register value, clear ADC14IFGR0
+    currentIntegerData[0] = adcValue; // getSpeed();
+    currentIntegerData[1] = adcValue; // getTurning();
+    currentIntegerData[2] = adcValue; // getDistance();
+    currentIntegerData[3] = (10*(adcValue%4) + adcValue%5); // getCoordinates();
+    currentIntegerData[4] = adcValue; // getHumpHeight();
 }
 
 int barcodeAvailable(void){
