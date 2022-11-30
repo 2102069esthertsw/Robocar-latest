@@ -5,7 +5,6 @@
  */
 
 #include <stdio.h>
-
 #include "hardware/irq.h"
 #include "hardware/uart.h"
 #include "pico/stdlib.h"
@@ -25,43 +24,40 @@
 #define UART_RX_PIN 5
 
 // Communications variables
+char fullString[255] = "{";
 int previousIntegerData[5];
-static char *datapointNames[6] = {"speed",         "turning",
-                                  "distanceWhole",
-                                  "humpHeight", "coordinates" ,  "barcode"};
 int currentIntegerData[5];
-// don't do checking for barcode
-// navigation endpoint placeholder
-// navigation data placeholder
-
-char fullString[255] = "{";  // change to 512 if sending nav data too
-char buffer[255];
-
+static char *datapointNames[7] = {"speed",         "turning",
+                                  "distance",
+                                  "humpHeight", "coordinates" ,  "barcode", "nav_dir"};
+// Storing other submodules' data
+char *barcodeReading[50]={"barcode reading"};
+char *nav_dir[20] = {".mmmJE++>3L=+>7L^>>`"};
 int endpointCoord = 0;
-
-const int maxDatapoints = 7;  // including 1 for navigation
+int varyData = 0;
+int sent_nav_dir =0;
 
 // Function prototypes
 void getIntDatapoints(void);
 void comms(void);
-int barcodeAvailable(void);
+int getSpeed(void);
+int getTurning(void);
+int getDistance(void);
+int getHumpHeight(void);
+int getCoordinates(void);
 
-// RX interrupt handler for Pico to read from M5 to serial
+/* RX interrupt handler for Pico to read from M5 to serial */
 void on_uart_rx() {
   int i = 0;
   while (uart_is_readable(UART_ID)) {
     printf("%c", uart_getc(UART_ID));
     if (i == 0) {
-      endpointCoord = (uart_getc(UART_ID) - '0') * 10;
+      endpointCoord = (uart_getc(UART_ID) - '0') * 10; // convert numeric reading from ASCII to int
       i++;
     } else {
-      endpointCoord += (uart_getc(UART_ID) - '0');
+      endpointCoord += (uart_getc(UART_ID) - '0'); // convert numeric reading from ASCII to int
     }
   }
-
-  // printf("Received something:\t");
-  // printf(buffer);
-  // memset(buffer, '\0', strlen(buffer));
   printf("\n");
 }
 
@@ -100,7 +96,7 @@ int main() {
   // Lets send a basic string out, and then run a loop and wait for RX
   // interrupts The handler will count them, but also reflect the incoming data
   // back with a slight change!
-  uart_puts(UART_ID, "\nHello, uart interrupts\n");
+  uart_puts(UART_ID, "\nCommunications started\n");
 
   while (1) {
     // other sub modules
@@ -108,54 +104,60 @@ int main() {
   }
 }
 
+/* Comms submodule code */
 void comms(void) {
   int datapoints = 0;  // number of datapoints in the message to be sent
   int i = 0;           // for-loop counter
-  if (barcodeAvailable() == 1) {
+
+  // Read barcode data
+  if (barcodeReading != "") {
     strcat(fullString, "\"");
     strcat(fullString, datapointNames[5]);
     strcat(fullString, "\": \"");
     strcat(fullString, barcodeReading);
     strcat(fullString, "\"");
     datapoints++;
+    memset(barcodeReading, '\0', strlen(barcodeReading));
   }
 
-  getIntDatapoints();  // fetch all the integer datapoints at once
+  getIntDatapoints(); // Get integer data points (distance, speed, turning, hump height, current coordinates)
 
+  /* Package each integer data point into the message */
   for (i = 0; i < 5; i++) {
-    // compare the integer datapoints with their previous values, send only
-    // those that have changed 
-    if(currentIntegerData[i] != previousIntegerData[i])
+    if(currentIntegerData[i] != previousIntegerData[i]) // send only changed datapoints
     {
-    if (datapoints != 0) {
-      strcat(fullString, ", ");
-    }
-    strcat(fullString, "\"");
-    strcat(fullString, datapointNames[i]);
-    strcat(fullString, "\": \"");
-    char tempData[8];
-    sprintf(tempData, "%d", currentIntegerData[i]);
-    strcat(fullString, tempData);
-    strcat(fullString, "\"");
-
-  if (datapoints != 0) {
-      strcat(fullString, ", ");
-    }
-    if(nav_dir != ""){
+      if (datapoints != 0) {
+        strcat(fullString, ", ");
+      }
       strcat(fullString, "\"");
       strcat(fullString, datapointNames[i]);
       strcat(fullString, "\": \"");
+      char tempData[8];
+      sprintf(tempData, "%d", currentIntegerData[i]);
+      strcat(fullString, tempData);
+      strcat(fullString, "\"");
+      previousIntegerData[i] = currentIntegerData[i]; // store current value as prev value for the next round
+      datapoints++;  // increment number of datapoints within the message
+    }
+  }
+  
+  /* Send string containing available directions to travel from each node only once*/
+  if(nav_dir != ""){
+    if(sent_nav_dir == 0){
+      if (datapoints != 0) {
+      strcat(fullString, ", ");
+      }
+      strcat(fullString, "\"");
+      strcat(fullString, datapointNames[6]);
+      strcat(fullString, "\": \"");
       strcat(fullString, nav_dir);
       strcat(fullString, "\"");
-    }
-
-    // store current value as prev value for the next round
-    previousIntegerData[i] = currentIntegerData[i];
-    datapoints++;  // increment number of datapoints within the message
-                   // }
+      datapoints++;
+      sent_nav_dir++;
     }
   }
 
+  /* Send message through UART to M5, for MQTT publish*/
   if (datapoints > 0) {
     strcat(fullString, "}");  // finish packaging the message since datapoints
                               // have been gathered
@@ -169,12 +171,34 @@ void comms(void) {
 
 //To extract the data 
 void getIntDatapoints(void) {
+  memset(barcodeReading, '\0', strlen(barcodeReading));
+  strcat(barcodeReading, "reading #");
   currentIntegerData[0] = getSpeed(); //Speed
   currentIntegerData[1] = getTurning(); //Turning
   currentIntegerData[2] = getDistance(); //Distance
   currentIntegerData[3] = getHumpHeight(); //HumpHeight
   currentIntegerData[4] = getCoordinates(); //Coordinates
+  char[8] tempData;
+  sprintf(tempData, "%d", varyData);
+  strcat(barcodeReading, tempData);
+  varyData++;
 }
 
-int barcodeAvailable(void) { return 1; }
-
+int getSpeed(void){
+  if(varyData%4 < 2){
+    return(10+varyData%3)
+  }
+  return (10 - varyData%3);
+}
+int getTurning(void){
+  return (varyData%3);
+}
+int getDistance(void){
+  return (varyData*5 + 20);
+}
+int getHumpHeight(void){
+  return (varyData%4);
+}
+int getCoordinates(void){
+   return (10*varyData%4 + );
+}
